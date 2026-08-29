@@ -1,23 +1,37 @@
 import type { Metadata } from "next";
-import { Nunito } from "next/font/google";
+import { Syne, IBM_Plex_Mono } from "next/font/google";
+import { AmbientBackground } from "@/components/ambient-background";
 import "./globals.css";
 
-const nunito = Nunito({
-  variable: "--font-nunito",
+const syne = Syne({
+  variable: "--font-syne",
   subsets: ["latin"],
-  weight: ["400", "600", "700", "800", "900"],
+  weight: ["400", "600", "700", "800"],
+});
+
+const ibmMono = IBM_Plex_Mono({
+  variable: "--font-ibm-mono",
+  subsets: ["latin"],
+  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {
-  title: "Realtime Collab — Live Cursors & Sticky Notes",
+  title: "Collab Board — Live Cursors & Sticky Notes",
   description:
-    "Collaborative board with live cursors and shared sticky notes powered by Partykit WebSockets.",
+    "Collaborative board with live cursors and shared sticky notes powered by PartyKit WebSockets.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="es" className={nunito.variable} style={{ colorScheme: "dark" }}>
-      <body className="font-sans antialiased">{children}</body>
+    <html
+      lang="es"
+      className={`${syne.variable} ${ibmMono.variable} h-full`}
+      style={{ colorScheme: "dark" }}
+    >
+      <body className="min-h-full bg-[#030306] font-sans text-zinc-100 antialiased">
+        <AmbientBackground />
+        {children}
+      </body>
     </html>
   );
 }

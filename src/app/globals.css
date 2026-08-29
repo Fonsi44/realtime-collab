@@ -1,15 +1,77 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: var(--font-nunito), system-ui, sans-serif;
+  --font-sans: var(--font-syne), system-ui, sans-serif;
+  --font-mono: var(--font-ibm-mono), ui-monospace, monospace;
 }
 
 body {
-  font-family: var(--font-nunito), system-ui, sans-serif;
-  background: #5c4a32;
-  color: #fef9c3;
+  font-family: var(--font-syne), system-ui, sans-serif;
 }
 
 ::selection {
-  background: rgb(250 204 21 / 0.35);
+  background: rgb(34 211 238 / 0.25);
+  color: white;
+}
+
+:focus-visible {
+  outline: 2px solid rgb(34 211 238);
+  outline-offset: 2px;
+}
+
+@keyframes ambient-drift {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(30px, -20px);
+  }
+}
+
+@keyframes ambient-drift-reverse {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(-40px, 30px);
+  }
+}
+
+@keyframes ambient-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.ambient-orb {
+  animation: ambient-drift 20s linear infinite;
+}
+
+.ambient-orb--slow {
+  animation: ambient-drift-reverse 25s linear infinite;
+}
+
+.ambient-glow {
+  animation: ambient-pulse 8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .ambient-orb,
+  .ambient-glow {
+    animation: none !important;
+  }
 }

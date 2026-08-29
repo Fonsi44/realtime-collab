@@ -2,19 +2,16 @@
 
 import usePartySocket from "partysocket/react";
 import { nanoid } from "nanoid";
-import {
-  Copy,
-  Download,
-  GripVertical,
-  Link2,
-  Plus,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { Download, GripVertical, Link2, Palette, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { JoinModal, getSavedCollabName } from "./join-modal";
-import { ROOM_TEMPLATES } from "@/lib/room-templates";
+import {
+  NOTE_COLORS,
+  ROOM_TEMPLATES,
+  noteColorById,
+  type NoteColorId,
+} from "@/lib/room-templates";
 
 type Note = {
   id: string;
@@ -33,8 +30,7 @@ type Cursor = {
   color: string;
 };
 
-const COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#34d399", "#f472b6", "#fb923c"];
-const NOTE_COLORS = ["#164e63", "#4c1d95", "#713f12", "#064e3b", "#831843", "#7c2d12"];
+const CURSOR_COLORS = ["#22d3ee", "#a78bfa", "#34d399", "#f472b6", "#60a5fa", "#fb923c"];
 
 const PARTY_HOST =
   process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "portfolio-live-party.fonsi44.partykit.dev";
@@ -49,6 +45,12 @@ function sanitizeRoom(raw: string | null): string {
   return cleaned || "collab";
 }
 
+function resolveNoteColor(color: string) {
+  const byId = NOTE_COLORS.find((c) => c.id === color);
+  if (byId) return byId;
+  return { id: color, bg: "#18181b", accent: "#71717a" };
+}
+
 export function CollabBoard() {
   const searchParams = useSearchParams();
   const room = sanitizeRoom(searchParams.get("room"));
@@ -58,7 +60,7 @@ export function CollabBoard() {
   useEffect(() => {
     const saved = getSavedCollabName();
     if (saved) {
-      setIdentity({ name: saved, color: randomFrom(COLORS) });
+      setIdentity({ name: saved, color: randomFrom(CURSOR_COLORS) });
     }
   }, []);
 
@@ -66,7 +68,7 @@ export function CollabBoard() {
     return (
       <JoinModal
         defaultName={defaultName}
-        colors={COLORS}
+        colors={CURSOR_COLORS}
         onJoin={(name, color) => setIdentity({ name, color })}
       />
     );
@@ -89,10 +91,12 @@ function CollabBoardInner({
   const [connected, setConnected] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [colorPopoverOpen, setColorPopoverOpen] = useState(false);
   const undoStack = useRef<Note[]>([]);
 
   const draggingRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   const socket = usePartySocket({
     host: PARTY_HOST,
@@ -175,7 +179,7 @@ function CollabBoardInner({
       x: 20 + Math.random() * 60,
       y: 20 + Math.random() * 50,
       text: "",
-      color: randomFrom(NOTE_COLORS),
+      color: randomFrom([...NOTE_COLORS]).id,
       user: name,
     };
     socket.send(JSON.stringify({ type: "note-add", ...note }));
@@ -188,17 +192,13 @@ function CollabBoardInner({
     setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, text } : n)));
   };
 
-  const moveNote = (id: string, x: number, y: number) => {
-    socket.send(JSON.stringify({ type: "note-move", id, x, y }));
-    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, x, y } : n)));
-  };
-
   const deleteNote = (id: string) => {
     const note = notes.find((n) => n.id === id);
     if (note) undoStack.current.push(note);
     socket.send(JSON.stringify({ type: "note-delete", id }));
     setNotes((prev) => prev.filter((n) => n.id !== id));
     setSelectedId(null);
+    setColorPopoverOpen(false);
   };
 
   const undoDelete = () => {
@@ -237,7 +237,7 @@ function CollabBoardInner({
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const setNoteColor = (id: string, noteColor: string) => {
+  const setNoteColor = (id: string, noteColor: NoteColorId) => {
     socket.send(JSON.stringify({ type: "note-color", id, color: noteColor }));
     setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, color: noteColor } : n)));
   };
@@ -311,98 +311,118 @@ function CollabBoardInner({
     return () => clearInterval(interval);
   }, [socket]);
 
+  useEffect(() => {
+    if (!colorPopoverOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setColorPopoverOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [colorPopoverOpen]);
+
   const uniqueUsers = [...new Set([name, ...cursors.map((c) => c.name)])];
+  const selectedNote = notes.find((n) => n.id === selectedId);
 
   return (
-    <div className="flex h-screen flex-col bg-[#5c4a32] pt-14">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b-4 border-dashed border-yellow-400/30 bg-[#4a3828] px-6 py-3">
-        <div>
-          <h1 className="text-xl font-black text-yellow-100">Collab Board</h1>
-          <p className="text-xs font-medium text-yellow-200/60">
-            Sala <span className="font-mono text-yellow-300">{room}</span> · notas, colores y
-            cursores en vivo
-          </p>
+    <div className="flex h-screen flex-col pt-[57px]">
+      <div className="flex items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-mono text-xs text-zinc-500">{room}</span>
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`}
+            aria-label={connected ? "Conectado" : "Desconectado"}
+          />
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+
+        <div className="flex items-center -space-x-1.5">
+          {uniqueUsers.slice(0, 6).map((u, i) => {
+            const cursor = cursors.find((c) => c.name === u);
+            const userColor = u === name ? color : cursor?.color ?? "#71717a";
+            return (
+              <span
+                key={u}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-zinc-950 font-mono text-[9px] font-medium text-zinc-950"
+                style={{ backgroundColor: userColor, zIndex: 6 - i }}
+                title={u}
+              >
+                {u.slice(0, 2).toUpperCase()}
+              </span>
+            );
+          })}
+          {uniqueUsers.length > 6 && (
+            <span className="ml-2 font-mono text-[10px] text-zinc-600">
+              +{uniqueUsers.length - 6}
+            </span>
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          {selectedNote && (
+            <div ref={popoverRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setColorPopoverOpen((o) => !o)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                aria-expanded={colorPopoverOpen}
+              >
+                <Palette className="h-3 w-3" aria-hidden="true" />
+                Color
+              </button>
+              {colorPopoverOpen && (
+                <div className="absolute top-full right-0 z-50 mt-1.5 flex items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-900 p-2 shadow-xl">
+                  {NOTE_COLORS.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      aria-label={`Color ${c.id}`}
+                      onClick={() => setNoteColor(selectedNote.id, c.id)}
+                      className={`h-5 w-5 rounded-full border-2 transition hover:scale-110 ${
+                        selectedNote.color === c.id ? "border-white" : "border-transparent"
+                      }`}
+                      style={{ backgroundColor: c.accent }}
+                    />
+                  ))}
+                  <div className="mx-0.5 h-4 w-px bg-white/10" />
+                  <button
+                    type="button"
+                    onClick={() => deleteNote(selectedNote.id)}
+                    className="inline-flex items-center rounded p-1 text-red-400 transition hover:bg-red-500/10"
+                    aria-label="Delete note"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
-            onClick={exportBoard}
-            className="inline-flex items-center gap-1.5 rounded-full border border-yellow-400/30 px-3 py-1.5 text-[10px] font-bold text-yellow-200 transition hover:bg-yellow-400/10"
+            onClick={addNote}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-500/15 px-3 py-1.5 font-mono text-[10px] text-cyan-300 ring-1 ring-cyan-500/30 transition hover:bg-cyan-500/25"
           >
-            <Download className="h-3 w-3" aria-hidden="true" />
-            Export
+            <Plus className="h-3 w-3" aria-hidden="true" />
+            Add note
           </button>
           <button
             type="button"
             onClick={copyRoomLink}
-            className="inline-flex items-center gap-1.5 rounded-full border border-yellow-400/30 px-3 py-1.5 text-[10px] font-bold text-yellow-200 transition hover:bg-yellow-400/10"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
-            {copied ? (
-              "¡Copiado!"
-            ) : (
-              <>
-                <Link2 className="h-3 w-3" aria-hidden="true" />
-                Share room
-              </>
-            )}
+            <Link2 className="h-3 w-3" aria-hidden="true" />
+            {copied ? "Copied" : "Share"}
           </button>
-          <div className="hidden items-center gap-2 sm:flex">
-            <Users className="h-3.5 w-3.5 text-yellow-300" aria-hidden="true" />
-            <div className="flex -space-x-1">
-              {uniqueUsers.slice(0, 5).map((u) => (
-                <span
-                  key={u}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#4a3828] bg-yellow-400 text-[9px] font-black text-[#3d2f1f]"
-                  title={u}
-                >
-                  {u.slice(-2)}
-                </span>
-              ))}
-            </div>
-            <span className="text-xs text-yellow-200/60">{uniqueUsers.length} online</span>
-          </div>
-          <span
-            className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`}
-            aria-label={connected ? "Conectado" : "Desconectado"}
-          />
           <button
             type="button"
-            onClick={addNote}
-            className="inline-flex items-center gap-1.5 rounded-full bg-yellow-400 px-4 py-2 text-xs font-black text-[#3d2f1f] shadow-md transition hover:bg-yellow-300 focus-visible:ring-2 focus-visible:ring-yellow-500"
+            onClick={exportBoard}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            Add Note
+            <Download className="h-3 w-3" aria-hidden="true" />
+            Export
           </button>
         </div>
       </div>
-
-      {selectedId && (
-        <div className="flex items-center gap-3 border-b border-yellow-400/20 bg-[#3d2f1f] px-6 py-2">
-          <span className="text-[10px] font-bold tracking-widest text-yellow-200/50 uppercase">
-            Note tools
-          </span>
-          <div className="flex gap-1">
-            {NOTE_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                aria-label={`Color ${c}`}
-                onClick={() => setNoteColor(selectedId, c)}
-                className="h-5 w-5 rounded-full border-2 border-white/20 transition hover:scale-110"
-                style={{ backgroundColor: c }}
-              />
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => deleteNote(selectedId)}
-            className="ml-auto inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-bold text-red-300 hover:bg-red-500/10"
-          >
-            <Trash2 className="h-3 w-3" aria-hidden="true" />
-            Delete
-          </button>
-        </div>
-      )}
 
       <div
         ref={boardRef}
@@ -410,19 +430,22 @@ function CollabBoardInner({
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerLeave={endDrag}
-        className="relative flex-1 overflow-hidden"
+        onClick={() => {
+          setSelectedId(null);
+          setColorPopoverOpen(false);
+        }}
+        className="relative flex-1 overflow-hidden bg-zinc-950"
         style={{
           backgroundImage:
-            "radial-gradient(circle at 1px 1px, rgba(255,220,100,0.15) 1px, transparent 0)",
+            "radial-gradient(circle at 1px 1px, rgba(34,211,238,0.12) 1px, transparent 0)",
           backgroundSize: "24px 24px",
-          backgroundColor: "#6b5344",
         }}
       >
         {notes.length === 0 && connected && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-            <div className="pointer-events-auto max-w-md rounded-2xl border-2 border-dashed border-yellow-400/30 bg-[#5c4a32]/90 px-8 py-6 text-center backdrop-blur-sm">
-              <p className="text-lg font-black text-yellow-100">Board vacío</p>
-              <p className="mt-1 text-sm text-yellow-200/60">
+            <div className="pointer-events-auto max-w-md rounded-2xl border border-white/10 bg-zinc-900/80 px-8 py-6 text-center backdrop-blur-sm">
+              <p className="text-base font-semibold text-zinc-100">Board vacío</p>
+              <p className="mt-1 text-sm text-zinc-500">
                 Elige una plantilla o añade una nota · ⌘Z deshace borrados
               </p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -431,7 +454,7 @@ function CollabBoardInner({
                     key={t.id}
                     type="button"
                     onClick={() => applyTemplate(t.id)}
-                    className="rounded-full border border-yellow-400/40 px-3 py-1.5 text-[10px] font-bold text-yellow-200 hover:bg-yellow-400/10"
+                    className="rounded-lg border border-white/10 px-3 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
                   >
                     {t.name}
                   </button>
@@ -441,38 +464,49 @@ function CollabBoardInner({
           </div>
         )}
 
-        {notes.map((note) => (
-          <div
-            key={note.id}
-            data-note
-            className={`absolute w-48 rounded-xl border p-3 shadow-lg transition ${
-              selectedId === note.id ? "border-yellow-300 ring-2 ring-yellow-400/40" : "border-white/10"
-            }`}
-            style={{
-              left: `${note.x}%`,
-              top: `${note.y}%`,
-              backgroundColor: note.color,
-            }}
-            onClick={() => setSelectedId(note.id)}
-          >
+        {notes.map((note) => {
+          const palette = resolveNoteColor(note.color);
+          return (
             <div
-              className="mb-1 flex cursor-grab items-center justify-between active:cursor-grabbing"
-              onPointerDown={(e) => startDrag(note.id, e)}
+              key={note.id}
+              data-note
+              className={`absolute w-48 rounded-xl border p-3 shadow-lg transition ${
+                selectedId === note.id
+                  ? "ring-2 ring-cyan-500/40"
+                  : "hover:border-white/15"
+              }`}
+              style={{
+                left: `${note.x}%`,
+                top: `${note.y}%`,
+                backgroundColor: palette.bg,
+                borderColor: `${palette.accent}33`,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedId(note.id);
+              }}
             >
-              <p className="font-mono text-[10px] text-white/50">{note.user}</p>
-              <GripVertical className="h-3 w-3 text-white/30" aria-hidden="true" />
+              <div
+                className="mb-1 flex cursor-grab items-center justify-between active:cursor-grabbing"
+                onPointerDown={(e) => startDrag(note.id, e)}
+              >
+                <p className="font-mono text-[10px]" style={{ color: `${palette.accent}99` }}>
+                  {note.user}
+                </p>
+                <GripVertical className="h-3 w-3 text-zinc-600" aria-hidden="true" />
+              </div>
+              <textarea
+                value={note.text}
+                onChange={(e) => updateNote(note.id, e.target.value)}
+                onFocus={() => setSelectedId(note.id)}
+                placeholder="Escribe algo…"
+                className="w-full resize-none bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
+                rows={3}
+                spellCheck={false}
+              />
             </div>
-            <textarea
-              value={note.text}
-              onChange={(e) => updateNote(note.id, e.target.value)}
-              onFocus={() => setSelectedId(note.id)}
-              placeholder="Escribe algo…"
-              className="w-full resize-none bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
-              rows={3}
-              spellCheck={false}
-            />
-          </div>
-        ))}
+          );
+        })}
 
         {cursors.map((cursor) => (
           <div
@@ -484,7 +518,7 @@ function CollabBoardInner({
               <path d="M0 0L0 16L4 12L7 19L10 18L7 11L14 11Z" />
             </svg>
             <span
-              className="ml-3 rounded px-1.5 py-0.5 text-[10px] font-medium text-white"
+              className="ml-3 rounded px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-950"
               style={{ backgroundColor: cursor.color }}
             >
               {cursor.name}
@@ -494,15 +528,10 @@ function CollabBoardInner({
 
         {!connected && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <p className="text-sm text-zinc-400">Conectando al servidor realtime…</p>
+            <p className="font-mono text-sm text-zinc-400">Conectando al servidor realtime…</p>
           </div>
         )}
       </div>
-
-      <p className="pointer-events-none absolute bottom-4 left-1/2 hidden -translate-x-1/2 text-[10px] text-yellow-200/30 sm:block">
-        <Copy className="mr-1 inline h-3 w-3" aria-hidden="true" />
-        Comparte el enlace de la sala para colaborar en tiempo real
-      </p>
     </div>
   );
 }

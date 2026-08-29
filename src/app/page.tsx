@@ -8,7 +8,7 @@ export default function Home() {
       <PortfolioBar />
       <Suspense
         fallback={
-          <div className="flex h-screen items-center justify-center bg-[#5c4a32] text-yellow-200/60">
+          <div className="flex h-screen items-center justify-center font-mono text-sm text-zinc-500">
             Cargando sala…
           </div>
         }
