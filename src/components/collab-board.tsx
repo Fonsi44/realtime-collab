@@ -4,6 +4,7 @@ import usePartySocket from "partysocket/react";
 import { nanoid } from "nanoid";
 import {
   Copy,
+  Download,
   GripVertical,
   Link2,
   Plus,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { JoinModal, getSavedCollabName } from "./join-modal";
 
 type Note = {
   id: string;
@@ -49,8 +51,38 @@ function sanitizeRoom(raw: string | null): string {
 export function CollabBoard() {
   const searchParams = useSearchParams();
   const room = sanitizeRoom(searchParams.get("room"));
-  const [name] = useState(() => `User-${Math.floor(Math.random() * 900 + 100)}`);
-  const [color] = useState(() => randomFrom(COLORS));
+  const defaultName = `User-${Math.floor(Math.random() * 900 + 100)}`;
+  const [identity, setIdentity] = useState<{ name: string; color: string } | null>(null);
+
+  useEffect(() => {
+    const saved = getSavedCollabName();
+    if (saved) {
+      setIdentity({ name: saved, color: randomFrom(COLORS) });
+    }
+  }, []);
+
+  if (!identity) {
+    return (
+      <JoinModal
+        defaultName={defaultName}
+        colors={COLORS}
+        onJoin={(name, color) => setIdentity({ name, color })}
+      />
+    );
+  }
+
+  return <CollabBoardInner room={room} name={identity.name} color={identity.color} />;
+}
+
+function CollabBoardInner({
+  room,
+  name,
+  color,
+}: {
+  room: string;
+  name: string;
+  color: string;
+}) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [cursors, setCursors] = useState<Cursor[]>([]);
   const [connected, setConnected] = useState(false);
@@ -218,6 +250,18 @@ export function CollabBoard() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const exportBoard = () => {
+    const blob = new Blob([JSON.stringify({ room, notes, exportedAt: new Date().toISOString() }, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `collab-${room}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     const interval = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) {
@@ -240,6 +284,14 @@ export function CollabBoard() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={exportBoard}
+            className="inline-flex items-center gap-1.5 rounded-full border border-yellow-400/30 px-3 py-1.5 text-[10px] font-bold text-yellow-200 transition hover:bg-yellow-400/10"
+          >
+            <Download className="h-3 w-3" aria-hidden="true" />
+            Export
+          </button>
           <button
             type="button"
             onClick={copyRoomLink}
@@ -326,6 +378,17 @@ export function CollabBoard() {
           backgroundColor: "#6b5344",
         }}
       >
+        {notes.length === 0 && connected && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="rounded-2xl border-2 border-dashed border-yellow-400/30 bg-[#5c4a32]/80 px-8 py-6 text-center backdrop-blur-sm">
+              <p className="text-lg font-black text-yellow-100">Board vacío</p>
+              <p className="mt-1 text-sm text-yellow-200/60">
+                Pulsa Add Note o comparte el enlace de la sala
+              </p>
+            </div>
+          </div>
+        )}
+
         {notes.map((note) => (
           <div
             key={note.id}
