@@ -133,6 +133,20 @@ function CollabBoardInner({
   const importInputRef = useRef<HTMLInputElement>(null);
   const firstNoteIdRef = useRef<string | null>(null);
   const [importToast, setImportToast] = useState<string | null>(null);
+  const [retroOpen, setRetroOpen] = useState(false);
+  const [retroLoading, setRetroLoading] = useState(false);
+  const [retroResult, setRetroResult] = useState<{
+    themes: { title: string; summary: string; noteIds: string[] }[];
+    actionItems: { text: string; priority: string }[];
+    emailDraft: string;
+  } | null>(null);
+  const [templatePrompt, setTemplatePrompt] = useState("");
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [remotePresence, setRemotePresence] = useState<string | null>(null);
+  const [clusters, setClusters] = useState<
+    { theme: string; noteIds: string[]; color: string }[]
+  >([]);
 
   useEffect(() => {
     if (shouldAutoStartGuide()) {
@@ -191,8 +205,41 @@ function CollabBoardInner({
           prev.map((n) => (n.id === data.id ? { ...n, color: data.color } : n)),
         );
       }
+      if (data.type === "presence") {
+        setRemotePresence(
+          `${data.user}: ${data.action}${data.noteId ? ` · nota ${String(data.noteId).slice(0, 6)}` : ""}`,
+        );
+        setTimeout(() => setRemotePresence(null), 2500);
+      }
     },
   });
+
+  useEffect(() => {
+    if (notes.length < 2) {
+      setClusters([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void fetch("/api/cluster", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notes: notes.map((n) => ({ id: n.id, text: n.text, x: n.x, y: n.y })),
+        }),
+      })
+        .then((r) => r.json())
+        .then((data) => setClusters(data.clusters ?? []))
+        .catch(() => setClusters([]));
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [notes]);
+
+  const sendPresence = useCallback(
+    (action: string, noteId?: string) => {
+      socket.send(JSON.stringify({ type: "presence", name, action, noteId }));
+    },
+    [socket, name],
+  );
 
   usePartySocket({
     host: PARTY_HOST,
@@ -313,6 +360,7 @@ function CollabBoardInner({
       offsetY: ((e.clientY - noteRect.top) / rect.height) * 100,
     };
     setSelectedId(id);
+    sendPresence("moviendo nota", id);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
@@ -362,6 +410,93 @@ function CollabBoardInner({
     a.download = `collab-${room}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportMarkdown = async () => {
+    const emailRes = await fetch("/api/export-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room,
+        notes: notes.map((n) => ({ text: n.text, user: n.user })),
+      }),
+    });
+    const emailData = (await emailRes.json()) as { emailDraft?: string };
+    const md = [
+      `# Collab · ${room}`,
+      ``,
+      `Exportado: ${new Date().toISOString()}`,
+      ``,
+      ...notes.map((n) => `- **${n.user}** (${n.color}): ${n.text}`),
+      ``,
+      `## Email follow-up (Gemini)`,
+      ``,
+      emailData.emailDraft ?? retroResult?.emailDraft ?? "",
+    ].join("\n");
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `collab-${room}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const runAiTemplate = async () => {
+    if (!templatePrompt.trim() || templateLoading) return;
+    setTemplateLoading(true);
+    try {
+      const res = await fetch("/api/template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: templatePrompt.trim() }),
+      });
+      const data = (await res.json()) as { notes?: Note[] };
+      if (!data.notes?.length) return;
+      for (const n of data.notes) {
+        const note: Note = {
+          id: nanoid(8),
+          x: n.x,
+          y: n.y,
+          text: n.text,
+          color: n.color,
+          user: name,
+        };
+        socket.send(JSON.stringify({ type: "note-add", ...note }));
+        setNotes((prev) => [...prev, note]);
+      }
+      setGuideProgress((p) => ({ ...p, appliedTemplate: true, addedNote: true }));
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
+  const runRetro = async () => {
+    if (notes.length === 0) return;
+    setRetroLoading(true);
+    setRetroOpen(true);
+    setRetroResult(null);
+    try {
+      const res = await fetch("/api/retro", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room,
+          notes: notes.map((n) => ({ id: n.id, text: n.text, color: n.color, user: n.user })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setRetroResult(data);
+    } catch {
+      setRetroResult({
+        themes: [],
+        actionItems: [],
+        emailDraft: "Error al generar retro — inténtalo de nuevo.",
+      });
+    } finally {
+      setRetroLoading(false);
+    }
   };
 
   type ImportPayload = {
@@ -536,6 +671,12 @@ function CollabBoardInner({
               +{uniqueUsers.length - 6}
             </span>
           )}
+          {isTyping && (
+            <span className="ml-2 font-mono text-[9px] text-cyan-500/80">escribiendo…</span>
+          )}
+          {remotePresence && (
+            <span className="ml-2 font-mono text-[9px] text-violet-400/90">{remotePresence}</span>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -584,11 +725,28 @@ function CollabBoardInner({
           </button>
           <button
             type="button"
+            onClick={runRetro}
+            disabled={notes.length === 0}
+            className="hidden items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-1.5 font-mono text-[10px] text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-40 sm:inline-flex"
+          >
+            <Sparkles className="h-3 w-3" aria-hidden="true" />
+            Cerrar retro
+          </button>
+          <button
+            type="button"
             onClick={exportBoard}
             className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
           >
             <Download className="h-3 w-3" aria-hidden="true" />
-            Exportar
+            JSON
+          </button>
+          <button
+            type="button"
+            onClick={exportMarkdown}
+            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
+          >
+            <Download className="h-3 w-3" aria-hidden="true" />
+            Markdown
           </button>
           <button
             type="button"
@@ -650,6 +808,47 @@ function CollabBoardInner({
         </div>
       )}
 
+      {retroOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-violet-500/30 bg-zinc-950 p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-mono text-sm text-violet-300">Facilitador Retro · Gemini</h3>
+              <button type="button" onClick={() => setRetroOpen(false)} className="text-zinc-500 hover:text-zinc-300">
+                ✕
+              </button>
+            </div>
+            {retroLoading ? (
+              <p className="font-mono text-xs text-zinc-500">Agrupando notas y extrayendo action items…</p>
+            ) : retroResult ? (
+              <div className="space-y-4 text-sm">
+                {retroResult.themes.map((t) => (
+                  <div key={t.title} className="rounded-xl border border-white/10 p-3">
+                    <p className="font-medium text-zinc-200">{t.title}</p>
+                    <p className="mt-1 text-xs text-zinc-500">{t.summary}</p>
+                  </div>
+                ))}
+                {retroResult.actionItems.length > 0 && (
+                  <div>
+                    <p className="font-mono text-[10px] uppercase text-zinc-600">Action items</p>
+                    <ul className="mt-2 space-y-1">
+                      {retroResult.actionItems.map((a, i) => (
+                        <li key={i} className="text-xs text-cyan-300">
+                          • [{a.priority}] {a.text}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="rounded-xl border border-white/10 bg-zinc-900/80 p-3">
+                  <p className="font-mono text-[10px] uppercase text-zinc-600">Email follow-up</p>
+                  <p className="mt-2 whitespace-pre-wrap text-xs text-zinc-400">{retroResult.emailDraft}</p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       <div
         ref={boardRef}
         onMouseMove={handleMouseMove}
@@ -667,6 +866,22 @@ function CollabBoardInner({
           backgroundSize: "24px 24px",
         }}
       >
+        {clusters.map((cluster) => {
+          const clusterNotes = notes.filter((n) => cluster.noteIds.includes(n.id));
+          if (!clusterNotes.length) return null;
+          const cx = clusterNotes.reduce((a, n) => a + n.x, 0) / clusterNotes.length;
+          const cy = clusterNotes.reduce((a, n) => a + n.y, 0) / clusterNotes.length - 8;
+          return (
+            <div
+              key={cluster.theme}
+              className="pointer-events-none absolute z-20 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 font-mono text-[9px] text-violet-200"
+              style={{ left: `${cx}%`, top: `${Math.max(2, cy)}%`, transform: "translate(-50%, -100%)" }}
+            >
+              {cluster.theme}
+            </div>
+          );
+        })}
+
         {notes.length === 0 && connected && !guideActive && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
             <div className="pointer-events-auto max-w-lg rounded-2xl border border-white/10 bg-zinc-900/90 px-8 py-7 text-center backdrop-blur-sm">
@@ -699,6 +914,22 @@ function CollabBoardInner({
                     {t.name}
                   </button>
                 ))}
+              </div>
+              <div className="mx-auto mt-4 flex max-w-md flex-col gap-2 sm:flex-row">
+                <input
+                  value={templatePrompt}
+                  onChange={(e) => setTemplatePrompt(e.target.value)}
+                  placeholder="Plantilla desde prompt (ej. sprint retro Q1)"
+                  className="flex-1 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 font-mono text-[10px] text-zinc-300"
+                />
+                <button
+                  type="button"
+                  onClick={runAiTemplate}
+                  disabled={templateLoading || !templatePrompt.trim()}
+                  className="rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 font-mono text-[10px] text-violet-300 disabled:opacity-40"
+                >
+                  {templateLoading ? "Generando…" : "IA template"}
+                </button>
               </div>
             </div>
           </div>
@@ -759,8 +990,15 @@ function CollabBoardInner({
               </div>
               <textarea
                 value={note.text}
-                onChange={(e) => updateNote(note.id, e.target.value)}
-                onFocus={() => setSelectedId(note.id)}
+                onChange={(e) => {
+                  updateNote(note.id, e.target.value);
+                  sendPresence("escribiendo", note.id);
+                }}
+                onFocus={() => {
+                  setSelectedId(note.id);
+                  setIsTyping(true);
+                }}
+                onBlur={() => setIsTyping(false)}
                 placeholder="Escribe aquí…"
                 className="w-full resize-none bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
                 rows={3}

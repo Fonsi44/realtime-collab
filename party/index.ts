@@ -78,6 +78,18 @@ export default class CollabServer implements Party.Server {
     if (data.type === "join") {
       sender.setState({ name: data.name, color: data.color });
     }
+
+    if (data.type === "presence") {
+      this.room.broadcast(
+        JSON.stringify({
+          type: "presence",
+          user: data.name,
+          action: data.action,
+          noteId: data.noteId,
+        }),
+        [sender.id],
+      );
+    }
   }
 
   onClose(conn: Party.Connection) {
