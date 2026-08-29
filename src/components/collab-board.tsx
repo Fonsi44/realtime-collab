@@ -2,8 +2,16 @@
 
 import usePartySocket from "partysocket/react";
 import { nanoid } from "nanoid";
-import { GripVertical, Plus, Users } from "lucide-react";
+import {
+  Copy,
+  GripVertical,
+  Link2,
+  Plus,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Note = {
   id: string;
@@ -32,17 +40,29 @@ function randomFrom<T>(arr: T[]) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function sanitizeRoom(raw: string | null): string {
+  if (!raw) return "collab";
+  const cleaned = raw.replace(/[^a-zA-Z0-9-_]/g, "").slice(0, 32);
+  return cleaned || "collab";
+}
+
 export function CollabBoard() {
+  const searchParams = useSearchParams();
+  const room = sanitizeRoom(searchParams.get("room"));
   const [name] = useState(() => `User-${Math.floor(Math.random() * 900 + 100)}`);
   const [color] = useState(() => randomFrom(COLORS));
   const [notes, setNotes] = useState<Note[]>([]);
   const [cursors, setCursors] = useState<Cursor[]>([]);
   const [connected, setConnected] = useState(false);
-  const [dragging, setDragging] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const draggingRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
 
   const socket = usePartySocket({
     host: PARTY_HOST,
-    room: "collab",
+    room,
     onOpen() {
       setConnected(true);
       socket.send(JSON.stringify({ type: "join", name, color }));
@@ -81,6 +101,15 @@ export function CollabBoard() {
           ),
         );
       }
+      if (data.type === "note-delete") {
+        setNotes((prev) => prev.filter((n) => n.id !== data.id));
+        if (selectedId === data.id) setSelectedId(null);
+      }
+      if (data.type === "note-color") {
+        setNotes((prev) =>
+          prev.map((n) => (n.id === data.id ? { ...n, color: data.color } : n)),
+        );
+      }
     },
   });
 
@@ -95,17 +124,15 @@ export function CollabBoard() {
     },
   });
 
-  const boardRef = useRef<HTMLDivElement>(null);
-
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!boardRef.current || !connected || dragging) return;
+      if (!boardRef.current || !connected || draggingRef.current) return;
       const rect = boardRef.current.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * 100;
       const y = ((e.clientY - rect.top) / rect.height) * 100;
       socket.send(JSON.stringify({ type: "cursor", x, y, name, color }));
     },
-    [connected, socket, name, color, dragging],
+    [connected, socket, name, color],
   );
 
   const addNote = () => {
@@ -119,6 +146,7 @@ export function CollabBoard() {
     };
     socket.send(JSON.stringify({ type: "note-add", ...note }));
     setNotes((prev) => [...prev, note]);
+    setSelectedId(note.id);
   };
 
   const updateNote = (id: string, text: string) => {
@@ -129,6 +157,65 @@ export function CollabBoard() {
   const moveNote = (id: string, x: number, y: number) => {
     socket.send(JSON.stringify({ type: "note-move", id, x, y }));
     setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, x, y } : n)));
+  };
+
+  const deleteNote = (id: string) => {
+    socket.send(JSON.stringify({ type: "note-delete", id }));
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+    setSelectedId(null);
+  };
+
+  const setNoteColor = (id: string, noteColor: string) => {
+    socket.send(JSON.stringify({ type: "note-color", id, color: noteColor }));
+    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, color: noteColor } : n)));
+  };
+
+  const startDrag = (id: string, e: React.PointerEvent) => {
+    if (!boardRef.current) return;
+    e.preventDefault();
+    const noteEl = (e.currentTarget as HTMLElement).closest("[data-note]") as HTMLElement;
+    const rect = boardRef.current.getBoundingClientRect();
+    const note = notes.find((n) => n.id === id);
+    if (!note || !noteEl) return;
+
+    const noteRect = noteEl.getBoundingClientRect();
+    draggingRef.current = {
+      id,
+      offsetX: ((e.clientX - noteRect.left) / rect.width) * 100,
+      offsetY: ((e.clientY - noteRect.top) / rect.height) * 100,
+    };
+    setSelectedId(id);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!draggingRef.current || !boardRef.current) return;
+      const rect = boardRef.current.getBoundingClientRect();
+      const { id, offsetX, offsetY } = draggingRef.current;
+      const x = Math.max(
+        0,
+        Math.min(85, ((e.clientX - rect.left) / rect.width) * 100 - offsetX),
+      );
+      const y = Math.max(
+        0,
+        Math.min(85, ((e.clientY - rect.top) / rect.height) * 100 - offsetY),
+      );
+      socket.send(JSON.stringify({ type: "note-move", id, x, y }));
+      setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, x, y } : n)));
+    },
+    [socket],
+  );
+
+  const endDrag = () => {
+    draggingRef.current = null;
+  };
+
+  const copyRoomLink = async () => {
+    const url = `${window.location.origin}${window.location.pathname}?room=${room}`;
+    await navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   useEffect(() => {
@@ -144,14 +231,29 @@ export function CollabBoard() {
 
   return (
     <div className="flex h-screen flex-col bg-[#5c4a32] pt-14">
-      <div className="flex items-center justify-between border-b-4 border-dashed border-yellow-400/30 bg-[#4a3828] px-6 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b-4 border-dashed border-yellow-400/30 bg-[#4a3828] px-6 py-3">
         <div>
-          <h1 className="text-xl font-black text-yellow-100">Collab Playground</h1>
+          <h1 className="text-xl font-black text-yellow-100">Collab Board</h1>
           <p className="text-xs font-medium text-yellow-200/60">
-            Sticky notes arrastrables + live cursors · abre 2 tabs para probar
+            Sala <span className="font-mono text-yellow-300">{room}</span> · notas, colores y
+            cursores en vivo
           </p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={copyRoomLink}
+            className="inline-flex items-center gap-1.5 rounded-full border border-yellow-400/30 px-3 py-1.5 text-[10px] font-bold text-yellow-200 transition hover:bg-yellow-400/10"
+          >
+            {copied ? (
+              "¡Copiado!"
+            ) : (
+              <>
+                <Link2 className="h-3 w-3" aria-hidden="true" />
+                Share room
+              </>
+            )}
+          </button>
           <div className="hidden items-center gap-2 sm:flex">
             <Users className="h-3.5 w-3.5 text-yellow-300" aria-hidden="true" />
             <div className="flex -space-x-1">
@@ -172,6 +274,7 @@ export function CollabBoard() {
             aria-label={connected ? "Conectado" : "Desconectado"}
           />
           <button
+            type="button"
             onClick={addNote}
             className="inline-flex items-center gap-1.5 rounded-full bg-yellow-400 px-4 py-2 text-xs font-black text-[#3d2f1f] shadow-md transition hover:bg-yellow-300 focus-visible:ring-2 focus-visible:ring-yellow-500"
           >
@@ -181,9 +284,40 @@ export function CollabBoard() {
         </div>
       </div>
 
+      {selectedId && (
+        <div className="flex items-center gap-3 border-b border-yellow-400/20 bg-[#3d2f1f] px-6 py-2">
+          <span className="text-[10px] font-bold tracking-widest text-yellow-200/50 uppercase">
+            Note tools
+          </span>
+          <div className="flex gap-1">
+            {NOTE_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                aria-label={`Color ${c}`}
+                onClick={() => setNoteColor(selectedId, c)}
+                className="h-5 w-5 rounded-full border-2 border-white/20 transition hover:scale-110"
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => deleteNote(selectedId)}
+            className="ml-auto inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-bold text-red-300 hover:bg-red-500/10"
+          >
+            <Trash2 className="h-3 w-3" aria-hidden="true" />
+            Delete
+          </button>
+        </div>
+      )}
+
       <div
         ref={boardRef}
         onMouseMove={handleMouseMove}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerLeave={endDrag}
         className="relative flex-1 overflow-hidden"
         style={{
           backgroundImage:
@@ -195,24 +329,20 @@ export function CollabBoard() {
         {notes.map((note) => (
           <div
             key={note.id}
-            className="absolute w-48 rounded-xl border border-white/10 p-3 shadow-lg"
+            data-note
+            className={`absolute w-48 rounded-xl border p-3 shadow-lg transition ${
+              selectedId === note.id ? "border-yellow-300 ring-2 ring-yellow-400/40" : "border-white/10"
+            }`}
             style={{
               left: `${note.x}%`,
               top: `${note.y}%`,
               backgroundColor: note.color,
             }}
+            onClick={() => setSelectedId(note.id)}
           >
             <div
               className="mb-1 flex cursor-grab items-center justify-between active:cursor-grabbing"
-              onMouseDown={() => setDragging(note.id)}
-              onMouseUp={() => setDragging(null)}
-              onMouseMove={(e) => {
-                if (dragging !== note.id || !boardRef.current) return;
-                const rect = boardRef.current.getBoundingClientRect();
-                const x = Math.max(0, Math.min(85, ((e.clientX - rect.left) / rect.width) * 100));
-                const y = Math.max(0, Math.min(85, ((e.clientY - rect.top) / rect.height) * 100));
-                moveNote(note.id, x, y);
-              }}
+              onPointerDown={(e) => startDrag(note.id, e)}
             >
               <p className="font-mono text-[10px] text-white/50">{note.user}</p>
               <GripVertical className="h-3 w-3 text-white/30" aria-hidden="true" />
@@ -220,6 +350,7 @@ export function CollabBoard() {
             <textarea
               value={note.text}
               onChange={(e) => updateNote(note.id, e.target.value)}
+              onFocus={() => setSelectedId(note.id)}
               placeholder="Escribe algo…"
               className="w-full resize-none bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
               rows={3}
@@ -252,6 +383,11 @@ export function CollabBoard() {
           </div>
         )}
       </div>
+
+      <p className="pointer-events-none absolute bottom-4 left-1/2 hidden -translate-x-1/2 text-[10px] text-yellow-200/30 sm:block">
+        <Copy className="mr-1 inline h-3 w-3" aria-hidden="true" />
+        Comparte el enlace de la sala para colaborar en tiempo real
+      </p>
     </div>
   );
 }
