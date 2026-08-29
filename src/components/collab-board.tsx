@@ -640,9 +640,10 @@ function CollabBoardInner({
 
       <div
         data-guide="toolbar"
-        className="relative z-40 flex shrink-0 items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm"
+        className="relative z-40 shrink-0 border-b border-white/5 bg-zinc-950/60 backdrop-blur-sm"
       >
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex items-center gap-3 overflow-x-auto px-4 py-2.5 scrollbar-none">
+        <div className="flex min-w-0 shrink-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-zinc-500">Sala · {room}</span>
           <span
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`}
@@ -651,7 +652,7 @@ function CollabBoardInner({
           />
         </div>
 
-        <div data-guide="users" className="flex items-center -space-x-1.5">
+        <div data-guide="users" className="flex shrink-0 items-center -space-x-1.5">
           {uniqueUsers.slice(0, 6).map((u, i) => {
             const cursor = cursors.find((c) => c.name === u);
             const userColor = u === name ? color : cursor?.color ?? "#71717a";
@@ -679,7 +680,7 @@ function CollabBoardInner({
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
@@ -727,7 +728,7 @@ function CollabBoardInner({
             type="button"
             onClick={runRetro}
             disabled={notes.length === 0}
-            className="hidden items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-1.5 font-mono text-[10px] text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-40 sm:inline-flex"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2.5 py-1.5 font-mono text-[10px] text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-40"
           >
             <Sparkles className="h-3 w-3" aria-hidden="true" />
             Cerrar retro
@@ -735,7 +736,7 @@ function CollabBoardInner({
           <button
             type="button"
             onClick={exportBoard}
-            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
             <Download className="h-3 w-3" aria-hidden="true" />
             JSON
@@ -743,7 +744,7 @@ function CollabBoardInner({
           <button
             type="button"
             onClick={exportMarkdown}
-            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
             <Download className="h-3 w-3" aria-hidden="true" />
             Markdown
@@ -751,7 +752,7 @@ function CollabBoardInner({
           <button
             type="button"
             onClick={importBoard}
-            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
             <Upload className="h-3 w-3" aria-hidden="true" />
             Importar
@@ -763,6 +764,7 @@ function CollabBoardInner({
             className="sr-only"
             onChange={handleImportFile}
           />
+        </div>
         </div>
       </div>
 
@@ -963,7 +965,7 @@ function CollabBoardInner({
               key={note.id}
               data-note
               {...(isGuideTarget ? { "data-guide": "board-note" } : {})}
-              className={`absolute w-52 rounded-xl border p-3 shadow-lg transition ${
+              className={`absolute w-[min(13rem,calc(100vw-3rem))] rounded-xl border p-3 shadow-lg transition sm:w-52 ${
                 selectedId === note.id
                   ? "ring-2 ring-cyan-500/40"
                   : "hover:border-white/15"
