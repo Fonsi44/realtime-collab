@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { JoinModal, getSavedCollabName } from "./join-modal";
+import { ROOM_TEMPLATES } from "@/lib/room-templates";
 
 type Note = {
   id: string;
@@ -88,6 +89,7 @@ function CollabBoardInner({
   const [connected, setConnected] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const undoStack = useRef<Note[]>([]);
 
   const draggingRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const boardRef = useRef<HTMLDivElement>(null);
@@ -192,10 +194,48 @@ function CollabBoardInner({
   };
 
   const deleteNote = (id: string) => {
+    const note = notes.find((n) => n.id === id);
+    if (note) undoStack.current.push(note);
     socket.send(JSON.stringify({ type: "note-delete", id }));
     setNotes((prev) => prev.filter((n) => n.id !== id));
     setSelectedId(null);
   };
+
+  const undoDelete = () => {
+    const note = undoStack.current.pop();
+    if (!note) return;
+    socket.send(JSON.stringify({ type: "note-add", ...note }));
+    setNotes((prev) => [...prev, note]);
+    setSelectedId(note.id);
+  };
+
+  const applyTemplate = (templateId: string) => {
+    const tpl = ROOM_TEMPLATES.find((t) => t.id === templateId);
+    if (!tpl) return;
+    for (const n of tpl.notes) {
+      const note: Note = {
+        id: nanoid(8),
+        x: n.x,
+        y: n.y,
+        text: n.text,
+        color: n.color,
+        user: name,
+      };
+      socket.send(JSON.stringify({ type: "note-add", ...note }));
+      setNotes((prev) => [...prev, note]);
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoDelete();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const setNoteColor = (id: string, noteColor: string) => {
     socket.send(JSON.stringify({ type: "note-color", id, color: noteColor }));
@@ -379,12 +419,24 @@ function CollabBoardInner({
         }}
       >
         {notes.length === 0 && connected && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="rounded-2xl border-2 border-dashed border-yellow-400/30 bg-[#5c4a32]/80 px-8 py-6 text-center backdrop-blur-sm">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+            <div className="pointer-events-auto max-w-md rounded-2xl border-2 border-dashed border-yellow-400/30 bg-[#5c4a32]/90 px-8 py-6 text-center backdrop-blur-sm">
               <p className="text-lg font-black text-yellow-100">Board vacío</p>
               <p className="mt-1 text-sm text-yellow-200/60">
-                Pulsa Add Note o comparte el enlace de la sala
+                Elige una plantilla o añade una nota · ⌘Z deshace borrados
               </p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                {ROOM_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => applyTemplate(t.id)}
+                    className="rounded-full border border-yellow-400/40 px-3 py-1.5 text-[10px] font-bold text-yellow-200 hover:bg-yellow-400/10"
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
