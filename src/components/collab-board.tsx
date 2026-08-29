@@ -625,7 +625,7 @@ function CollabBoardInner({
   const guideNoteId = firstNoteIdRef.current ?? notes[0]?.id ?? null;
 
   return (
-    <div className="flex h-screen flex-col pt-[57px]">
+    <div className="flex h-screen flex-col pt-[4.75rem] md:pt-14">
       <CollabGuide
         progress={guideProgress}
         active={guideActive}
