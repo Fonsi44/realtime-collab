@@ -11,8 +11,10 @@ import {
   Plus,
   Sparkles,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { JoinModal, getSavedCollabName } from "./join-modal";
 import { CollabGuide, resetCollabGuide, shouldAutoStartGuide, type GuideProgress } from "./collab-guide";
@@ -125,8 +127,12 @@ function CollabBoardInner({
   const draggingRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const didDragRef = useRef(false);
   const boardRef = useRef<HTMLDivElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const colorBtnRef = useRef<HTMLButtonElement>(null);
+  const popoverPanelRef = useRef<HTMLDivElement>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const firstNoteIdRef = useRef<string | null>(null);
+  const [importToast, setImportToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (shouldAutoStartGuide()) {
@@ -358,6 +364,73 @@ function CollabBoardInner({
     URL.revokeObjectURL(url);
   };
 
+  type ImportPayload = {
+    notes?: unknown;
+    room?: unknown;
+  };
+
+  type ImportNote = {
+    x: number;
+    y: number;
+    text: string;
+    color: string;
+  };
+
+  const isValidImportNote = (note: unknown): note is ImportNote => {
+    if (!note || typeof note !== "object") return false;
+    const n = note as Record<string, unknown>;
+    return (
+      typeof n.x === "number" &&
+      typeof n.y === "number" &&
+      typeof n.text === "string" &&
+      typeof n.color === "string"
+    );
+  };
+
+  const importBoard = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const data = JSON.parse(raw) as ImportPayload;
+
+      if (!Array.isArray(data.notes)) {
+        throw new Error("Formato inválido: falta el array «notes»");
+      }
+
+      const validNotes = data.notes.filter(isValidImportNote);
+      if (!validNotes.length) {
+        throw new Error("No hay notas válidas en el archivo");
+      }
+
+      for (const imported of validNotes) {
+        const note: Note = {
+          id: nanoid(8),
+          x: Math.max(0, Math.min(85, imported.x)),
+          y: Math.max(0, Math.min(85, imported.y)),
+          text: imported.text,
+          color: imported.color,
+          user: name,
+        };
+        socket.send(JSON.stringify({ type: "note-add", ...note }));
+        setNotes((prev) => [...prev, note]);
+      }
+
+      setImportToast(`${validNotes.length} nota${validNotes.length === 1 ? "" : "s"} importada${validNotes.length === 1 ? "" : "s"}`);
+      setTimeout(() => setImportToast(null), 3000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error al importar JSON";
+      setImportToast(message);
+      setTimeout(() => setImportToast(null), 3500);
+    }
+  };
+
   const restartGuide = () => {
     resetCollabGuide();
     setGuideProgress({
@@ -381,11 +454,32 @@ function CollabBoardInner({
   }, [socket]);
 
   useEffect(() => {
+    if (!colorPopoverOpen) {
+      setPopoverPos(null);
+      return;
+    }
+    const updatePos = () => {
+      const btn = colorBtnRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      setPopoverPos({ top: rect.bottom + 6, left: rect.right });
+    };
+    updatePos();
+    window.addEventListener("resize", updatePos);
+    window.addEventListener("scroll", updatePos, true);
+    return () => {
+      window.removeEventListener("resize", updatePos);
+      window.removeEventListener("scroll", updatePos, true);
+    };
+  }, [colorPopoverOpen]);
+
+  useEffect(() => {
     if (!colorPopoverOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setColorPopoverOpen(false);
-      }
+      const target = e.target as Node;
+      if (colorBtnRef.current?.contains(target)) return;
+      if (popoverPanelRef.current?.contains(target)) return;
+      setColorPopoverOpen(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -411,7 +505,7 @@ function CollabBoardInner({
 
       <div
         data-guide="toolbar"
-        className="flex items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm"
+        className="relative z-40 flex shrink-0 items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm"
       >
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-zinc-500">Sala · {room}</span>
@@ -457,43 +551,17 @@ function CollabBoardInner({
           </button>
 
           {selectedNote && (
-            <div ref={popoverRef} className="relative">
-              <button
-                type="button"
-                data-guide="color-btn"
-                onClick={() => setColorPopoverOpen((o) => !o)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
-                aria-expanded={colorPopoverOpen}
-              >
-                <Palette className="h-3 w-3" aria-hidden="true" />
-                Color
-              </button>
-              {colorPopoverOpen && (
-                <div className="absolute top-full right-0 z-50 mt-1.5 flex items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-900 p-2 shadow-xl">
-                  {NOTE_COLORS.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      aria-label={`Color ${c.id}`}
-                      onClick={() => setNoteColor(selectedNote.id, c.id)}
-                      className={`h-5 w-5 rounded-full border-2 transition hover:scale-110 ${
-                        selectedNote.color === c.id ? "border-white" : "border-transparent"
-                      }`}
-                      style={{ backgroundColor: c.accent }}
-                    />
-                  ))}
-                  <div className="mx-0.5 h-4 w-px bg-white/10" />
-                  <button
-                    type="button"
-                    onClick={() => deleteNote(selectedNote.id)}
-                    className="inline-flex items-center rounded p-1 text-red-400 transition hover:bg-red-500/10"
-                    aria-label="Borrar nota"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-            </div>
+            <button
+              ref={colorBtnRef}
+              type="button"
+              data-guide="color-btn"
+              onClick={() => setColorPopoverOpen((o) => !o)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+              aria-expanded={colorPopoverOpen}
+            >
+              <Palette className="h-3 w-3" aria-hidden="true" />
+              Color
+            </button>
           )}
 
           <button
@@ -522,8 +590,65 @@ function CollabBoardInner({
             <Download className="h-3 w-3" aria-hidden="true" />
             Exportar
           </button>
+          <button
+            type="button"
+            onClick={importBoard}
+            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
+          >
+            <Upload className="h-3 w-3" aria-hidden="true" />
+            Importar
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="sr-only"
+            onChange={handleImportFile}
+          />
         </div>
       </div>
+
+      {colorPopoverOpen &&
+        popoverPos &&
+        selectedNote &&
+        createPortal(
+          <div
+            ref={popoverPanelRef}
+            role="dialog"
+            aria-label="Selector de color"
+            className="fixed z-[100] flex items-center gap-1.5 rounded-lg border border-white/10 bg-zinc-900 p-2 shadow-xl"
+            style={{ top: popoverPos.top, left: popoverPos.left, transform: "translateX(-100%)" }}
+          >
+            {NOTE_COLORS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                aria-label={`Color ${c.id}`}
+                onClick={() => setNoteColor(selectedNote.id, c.id)}
+                className={`h-5 w-5 rounded-full border-2 transition hover:scale-110 ${
+                  selectedNote.color === c.id ? "border-white" : "border-transparent"
+                }`}
+                style={{ backgroundColor: c.accent }}
+              />
+            ))}
+            <div className="mx-0.5 h-4 w-px bg-white/10" />
+            <button
+              type="button"
+              onClick={() => deleteNote(selectedNote.id)}
+              className="inline-flex items-center rounded p-1 text-red-400 transition hover:bg-red-500/10"
+              aria-label="Borrar nota"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>,
+          document.body,
+        )}
+
+      {importToast && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-white/10 bg-zinc-900/95 px-4 py-2 font-mono text-xs text-cyan-300 shadow-lg">
+          {importToast}
+        </div>
+      )}
 
       <div
         ref={boardRef}
