@@ -2,10 +2,21 @@
 
 import usePartySocket from "partysocket/react";
 import { nanoid } from "nanoid";
-import { Download, GripVertical, Link2, Palette, Plus, Trash2 } from "lucide-react";
+import {
+  Download,
+  GripVertical,
+  HelpCircle,
+  Link2,
+  Palette,
+  Plus,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { JoinModal, getSavedCollabName } from "./join-modal";
+import { CollabGuide, resetCollabGuide, shouldAutoStartGuide, type GuideProgress } from "./collab-guide";
+import { HelpDrawer } from "./help-drawer";
 import {
   NOTE_COLORS,
   ROOM_TEMPLATES,
@@ -51,6 +62,12 @@ function resolveNoteColor(color: string) {
   return { id: color, bg: "#18181b", accent: "#71717a" };
 }
 
+const EMPTY_STEPS = [
+  { n: "1", text: "Pulsa «Añadir nota» o elige una plantilla" },
+  { n: "2", text: "Escribe y arrastra las notas por el tablero" },
+  { n: "3", text: "Comparte el enlace para colaborar en vivo" },
+];
+
 export function CollabBoard() {
   const searchParams = useSearchParams();
   const room = sanitizeRoom(searchParams.get("room"));
@@ -69,6 +86,7 @@ export function CollabBoard() {
       <JoinModal
         defaultName={defaultName}
         colors={CURSOR_COLORS}
+        room={room}
         onJoin={(name, color) => setIdentity({ name, color })}
       />
     );
@@ -92,11 +110,30 @@ function CollabBoardInner({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [colorPopoverOpen, setColorPopoverOpen] = useState(false);
-  const undoStack = useRef<Note[]>([]);
+  const [guideActive, setGuideActive] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [guideProgress, setGuideProgress] = useState<GuideProgress>({
+    addedNote: false,
+    editedNote: false,
+    draggedNote: false,
+    changedColor: false,
+    shared: false,
+    appliedTemplate: false,
+  });
 
+  const undoStack = useRef<Note[]>([]);
   const draggingRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
+  const didDragRef = useRef(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const firstNoteIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (shouldAutoStartGuide()) {
+      const t = setTimeout(() => setGuideActive(true), 800);
+      return () => clearTimeout(t);
+    }
+  }, []);
 
   const socket = usePartySocket({
     host: PARTY_HOST,
@@ -182,14 +219,19 @@ function CollabBoardInner({
       color: randomFrom([...NOTE_COLORS]).id,
       user: name,
     };
+    firstNoteIdRef.current = note.id;
     socket.send(JSON.stringify({ type: "note-add", ...note }));
     setNotes((prev) => [...prev, note]);
     setSelectedId(note.id);
+    setGuideProgress((p) => ({ ...p, addedNote: true }));
   };
 
   const updateNote = (id: string, text: string) => {
     socket.send(JSON.stringify({ type: "note-update", id, text }));
     setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, text } : n)));
+    if (text.trim().length > 0) {
+      setGuideProgress((p) => ({ ...p, editedNote: true }));
+    }
   };
 
   const deleteNote = (id: string) => {
@@ -224,6 +266,12 @@ function CollabBoardInner({
       socket.send(JSON.stringify({ type: "note-add", ...note }));
       setNotes((prev) => [...prev, note]);
     }
+    setGuideProgress((p) => ({
+      ...p,
+      appliedTemplate: true,
+      addedNote: true,
+      editedNote: true,
+    }));
   };
 
   useEffect(() => {
@@ -240,11 +288,13 @@ function CollabBoardInner({
   const setNoteColor = (id: string, noteColor: NoteColorId) => {
     socket.send(JSON.stringify({ type: "note-color", id, color: noteColor }));
     setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, color: noteColor } : n)));
+    setGuideProgress((p) => ({ ...p, changedColor: true }));
   };
 
   const startDrag = (id: string, e: React.PointerEvent) => {
     if (!boardRef.current) return;
     e.preventDefault();
+    didDragRef.current = false;
     const noteEl = (e.currentTarget as HTMLElement).closest("[data-note]") as HTMLElement;
     const rect = boardRef.current.getBoundingClientRect();
     const note = notes.find((n) => n.id === id);
@@ -263,6 +313,7 @@ function CollabBoardInner({
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!draggingRef.current || !boardRef.current) return;
+      didDragRef.current = true;
       const rect = boardRef.current.getBoundingClientRect();
       const { id, offsetX, offsetY } = draggingRef.current;
       const x = Math.max(
@@ -280,6 +331,9 @@ function CollabBoardInner({
   );
 
   const endDrag = () => {
+    if (draggingRef.current && didDragRef.current) {
+      setGuideProgress((p) => ({ ...p, draggedNote: true }));
+    }
     draggingRef.current = null;
   };
 
@@ -287,19 +341,34 @@ function CollabBoardInner({
     const url = `${window.location.origin}${window.location.pathname}?room=${room}`;
     await navigator.clipboard.writeText(url);
     setCopied(true);
+    setGuideProgress((p) => ({ ...p, shared: true }));
     setTimeout(() => setCopied(false), 2000);
   };
 
   const exportBoard = () => {
-    const blob = new Blob([JSON.stringify({ room, notes, exportedAt: new Date().toISOString() }, null, 2)], {
-      type: "application/json",
-    });
+    const blob = new Blob(
+      [JSON.stringify({ room, notes, exportedAt: new Date().toISOString() }, null, 2)],
+      { type: "application/json" },
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `collab-${room}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const restartGuide = () => {
+    resetCollabGuide();
+    setGuideProgress({
+      addedNote: notes.length > 0,
+      editedNote: notes.some((n) => n.text.trim().length > 0),
+      draggedNote: false,
+      changedColor: false,
+      shared: false,
+      appliedTemplate: false,
+    });
+    setGuideActive(true);
   };
 
   useEffect(() => {
@@ -324,19 +393,36 @@ function CollabBoardInner({
 
   const uniqueUsers = [...new Set([name, ...cursors.map((c) => c.name)])];
   const selectedNote = notes.find((n) => n.id === selectedId);
+  const guideNoteId = firstNoteIdRef.current ?? notes[0]?.id ?? null;
 
   return (
     <div className="flex h-screen flex-col pt-[57px]">
-      <div className="flex items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm">
+      <CollabGuide
+        progress={guideProgress}
+        active={guideActive}
+        onActiveChange={setGuideActive}
+        onRequestHelp={() => setHelpOpen(true)}
+      />
+      <HelpDrawer
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        onRestartGuide={restartGuide}
+      />
+
+      <div
+        data-guide="toolbar"
+        className="flex items-center gap-3 border-b border-white/5 bg-zinc-950/60 px-4 py-2.5 backdrop-blur-sm"
+      >
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-xs text-zinc-500">{room}</span>
+          <span className="truncate font-mono text-xs text-zinc-500">Sala · {room}</span>
           <span
             className={`h-1.5 w-1.5 shrink-0 rounded-full ${connected ? "bg-emerald-400" : "bg-red-400"}`}
+            title={connected ? "Conectado en vivo" : "Desconectado"}
             aria-label={connected ? "Conectado" : "Desconectado"}
           />
         </div>
 
-        <div className="flex items-center -space-x-1.5">
+        <div data-guide="users" className="flex items-center -space-x-1.5">
           {uniqueUsers.slice(0, 6).map((u, i) => {
             const cursor = cursors.find((c) => c.name === u);
             const userColor = u === name ? color : cursor?.color ?? "#71717a";
@@ -345,7 +431,7 @@ function CollabBoardInner({
                 key={u}
                 className="inline-flex h-6 w-6 items-center justify-center rounded-full border-2 border-zinc-950 font-mono text-[9px] font-medium text-zinc-950"
                 style={{ backgroundColor: userColor, zIndex: 6 - i }}
-                title={u}
+                title={u === name ? `${u} (tú)` : u}
               >
                 {u.slice(0, 2).toUpperCase()}
               </span>
@@ -359,10 +445,22 @@ function CollabBoardInner({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            data-guide="help-toolbar"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+            aria-label="Ayuda"
+          >
+            <HelpCircle className="h-3 w-3" aria-hidden="true" />
+            <span className="hidden sm:inline">Ayuda</span>
+          </button>
+
           {selectedNote && (
             <div ref={popoverRef} className="relative">
               <button
                 type="button"
+                data-guide="color-btn"
                 onClick={() => setColorPopoverOpen((o) => !o)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
                 aria-expanded={colorPopoverOpen}
@@ -389,7 +487,7 @@ function CollabBoardInner({
                     type="button"
                     onClick={() => deleteNote(selectedNote.id)}
                     className="inline-flex items-center rounded p-1 text-red-400 transition hover:bg-red-500/10"
-                    aria-label="Delete note"
+                    aria-label="Borrar nota"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -397,29 +495,32 @@ function CollabBoardInner({
               )}
             </div>
           )}
+
           <button
             type="button"
+            data-guide="add-note"
             onClick={addNote}
             className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-500/15 px-3 py-1.5 font-mono text-[10px] text-cyan-300 ring-1 ring-cyan-500/30 transition hover:bg-cyan-500/25"
           >
             <Plus className="h-3 w-3" aria-hidden="true" />
-            Add note
+            Añadir nota
           </button>
           <button
             type="button"
+            data-guide="share-btn"
             onClick={copyRoomLink}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
           >
             <Link2 className="h-3 w-3" aria-hidden="true" />
-            {copied ? "Copied" : "Share"}
+            {copied ? "¡Copiado!" : "Compartir"}
           </button>
           <button
             type="button"
             onClick={exportBoard}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+            className="hidden items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300 sm:inline-flex"
           >
             <Download className="h-3 w-3" aria-hidden="true" />
-            Export
+            Exportar
           </button>
         </div>
       </div>
@@ -441,20 +542,34 @@ function CollabBoardInner({
           backgroundSize: "24px 24px",
         }}
       >
-        {notes.length === 0 && connected && (
+        {notes.length === 0 && connected && !guideActive && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-            <div className="pointer-events-auto max-w-md rounded-2xl border border-white/10 bg-zinc-900/80 px-8 py-6 text-center backdrop-blur-sm">
-              <p className="text-base font-semibold text-zinc-100">Board vacío</p>
+            <div className="pointer-events-auto max-w-lg rounded-2xl border border-white/10 bg-zinc-900/90 px-8 py-7 text-center backdrop-blur-sm">
+              <Sparkles className="mx-auto h-8 w-8 text-cyan-400/80" aria-hidden="true" />
+              <p className="mt-3 text-lg font-semibold text-zinc-100">Tablero vacío</p>
               <p className="mt-1 text-sm text-zinc-500">
-                Elige una plantilla o añade una nota · ⌘Z deshace borrados
+                Empieza en 3 pasos — o pulsa «Guía interactiva» abajo a la derecha
               </p>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <ol className="mt-5 space-y-2 text-left">
+                {EMPTY_STEPS.map((s) => (
+                  <li
+                    key={s.n}
+                    className="flex items-start gap-3 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-500/15 font-mono text-[10px] text-cyan-400">
+                      {s.n}
+                    </span>
+                    <span className="text-sm text-zinc-400">{s.text}</span>
+                  </li>
+                ))}
+              </ol>
+              <div data-guide="templates" className="mt-5 flex flex-wrap justify-center gap-2">
                 {ROOM_TEMPLATES.map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => applyTemplate(t.id)}
-                    className="rounded-lg border border-white/10 px-3 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                    className="rounded-lg border border-white/10 px-3 py-2 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:bg-cyan-500/5 hover:text-cyan-300"
                   >
                     {t.name}
                   </button>
@@ -464,13 +579,35 @@ function CollabBoardInner({
           </div>
         )}
 
+        {notes.length === 0 && connected && guideActive && (
+          <div
+            data-guide="templates"
+            className="pointer-events-none absolute bottom-8 left-1/2 z-10 -translate-x-1/2"
+          >
+            <div className="pointer-events-auto flex flex-wrap justify-center gap-2 rounded-xl border border-white/10 bg-zinc-900/90 px-4 py-3 backdrop-blur-sm">
+              {ROOM_TEMPLATES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => applyTemplate(t.id)}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 font-mono text-[10px] text-zinc-400 transition hover:border-cyan-500/30 hover:text-cyan-300"
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {notes.map((note) => {
           const palette = resolveNoteColor(note.color);
+          const isGuideTarget = note.id === guideNoteId;
           return (
             <div
               key={note.id}
               data-note
-              className={`absolute w-48 rounded-xl border p-3 shadow-lg transition ${
+              {...(isGuideTarget ? { "data-guide": "board-note" } : {})}
+              className={`absolute w-52 rounded-xl border p-3 shadow-lg transition ${
                 selectedId === note.id
                   ? "ring-2 ring-cyan-500/40"
                   : "hover:border-white/15"
@@ -499,7 +636,7 @@ function CollabBoardInner({
                 value={note.text}
                 onChange={(e) => updateNote(note.id, e.target.value)}
                 onFocus={() => setSelectedId(note.id)}
-                placeholder="Escribe algo…"
+                placeholder="Escribe aquí…"
                 className="w-full resize-none bg-transparent text-sm text-zinc-200 placeholder:text-zinc-600 outline-none"
                 rows={3}
                 spellCheck={false}
@@ -528,7 +665,7 @@ function CollabBoardInner({
 
         {!connected && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <p className="font-mono text-sm text-zinc-400">Conectando al servidor realtime…</p>
+            <p className="font-mono text-sm text-zinc-400">Conectando al servidor en vivo…</p>
           </div>
         )}
       </div>
